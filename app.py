@@ -6,81 +6,95 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="簡易股票分析助手", layout="wide")
+st.set_page_config(page_title="專業股票分析助手", layout="wide")
 st.title("📈 股票技術分析 App")
 
 # --- 側邊欄：使用者輸入 ---
 st.sidebar.header("查詢設定")
-ticker = st.sidebar.text_input("輸入股票代碼 (例如: AAPL, TSLA, 2330.TW)", "2330.TW")
+ticker = st.sidebar.text_input("輸入股票代碼 (例如: AAPL, 2330.TW)", "2330.TW")
 start_date = st.sidebar.date_input("開始日期", datetime.now() - timedelta(days=365))
 end_date = st.sidebar.date_input("結束日期", datetime.now())
 
-# --- 抓取數據 ---
+# --- 抓取數據與處理 ---
 @st.cache_data
 def load_data(symbol, start, end):
-    data = yf.download(symbol, start=start, end=end)
+    # 修正點 1: 使用 auto_adjust=True 讓欄位結構更單純
+    data = yf.download(symbol, start=start, end=end, auto_adjust=True)
+    
+    if data.empty:
+        return data
+        
+    # 修正點 2: 處理 yfinance 新版本的多層索引 (MultiIndex) 問題
+    # 這行程式碼會把 ('Close', '2330.TW') 簡化為 'Close'
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+        
     return data
 
 try:
     df = load_data(ticker, start_date, end_date)
 
-    if df.empty:
-        st.error("找不到該股票數據，請檢查代碼是否正確。")
+    if df.empty or len(df) < 10:
+        st.error("數據不足或找不到該股票，請檢查代碼或日期範圍。")
     else:
-        # --- 計算技術指標 (使用 pandas_ta) ---
-        df['MA20'] = ta.sma(df['Close'], length=20)
-        df['MA60'] = ta.sma(df['Close'], length=60)
-        df['RSI'] = ta.rsi(df['Close'], length=14)
+        # --- 計算技術指標 ---
+        # 確保數據是 Series 格式
+        close_price = df['Close']
+        df['MA20'] = ta.sma(close_price, length=20)
+        df['MA60'] = ta.sma(close_price, length=60)
+        df['RSI'] = ta.rsi(close_price, length=14)
 
-       # --- 顯示基本資訊 ---
-        stock_info = yf.Ticker(ticker).info
-        st.subheader(f"{stock_info.get('longName', ticker)} - 概況")
-        
-        # 修正點：確保抓到的是數值而不是 Series
-        # 使用 .values[-1] 或 float() 來確保取得單一數字
-        try:
-            current_price = float(df['Close'].iloc[-1])
-            prev_price = float(df['Close'].iloc[-2])
-            price_change = ((current_price / prev_price) - 1) * 100
-            
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("現價", f"{current_price:.2f}")
-            col2.metric("漲跌幅", f"{price_change:.2f}%")
-            col3.metric("52週最高", stock_info.get('fiftyTwoWeekHigh', 'N/A'))
-            col4.metric("市值 (B)", round(stock_info.get('marketCap', 0) / 1e9, 2))
-        except Exception as e:
-            st.warning(f"部分數據顯示異常: {e}")
+        # --- 顯示基本資訊 ---
+        # 取得最新一筆數據並轉為標量 (float)
+        current_price = float(df['Close'].iloc[-1])
+        prev_price = float(df['Close'].iloc[-2])
+        price_diff = current_price - prev_price
+        price_change = (price_diff / prev_price) * 100
 
-        # --- 繪製 K 線圖 ---
+        col1, col2, col3 = st.columns(3)
+        col1.metric("目前股價", f"{current_price:.2f}", f"{price_diff:.2f} ({price_change:.2f}%)")
+        col2.metric("最高價 (區間)", f"{df['High'].max():.2f}")
+        col3.metric("最低價 (區間)", f"{df['Low'].min():.2f}")
+
+        # --- 繪製 K 線圖 (Plotly) ---
         st.subheader("技術分析圖表")
+        
         fig = go.Figure()
 
-        # K 線圖
+        # 加入 K 線
         fig.add_trace(go.Candlestick(
             x=df.index,
-            open=df['Open'], high=df['High'],
-            low=df['Low'], close=df['Close'],
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
             name="K線"
         ))
 
-        # 均線
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1), name='MA20'))
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue', width=1), name='MA60'))
+        # 加入均線 (MA)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='MA20'))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='blue', width=1.5), name='MA60'))
 
-        fig.update_layout(xaxis_rangeslider_visible=False, height=600, template="plotly_dark")
+        # 圖表佈局設定
+        fig.update_layout(
+            xaxis_rangeslider_visible=False, # 隱藏下方的滑桿以增加清晰度
+            height=600,
+            template="plotly_dark",
+            margin=dict(l=10, r=10, t=30, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        
+        # 顯示圖表
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 顯示數據表格 ---
-        st.subheader("歷史數據 (最近 10 筆)")
-        st.dataframe(df.tail(10), use_container_width=True)
-
-        # --- RSI 指標 ---
+        # --- 顯示 RSI ---
         st.subheader("RSI 強弱指標")
         st.line_chart(df['RSI'])
 
+        # --- 顯示數據表格 ---
+        with st.expander("查看原始歷史數據"):
+            st.dataframe(df.sort_index(ascending=False), use_container_width=True)
+
 except Exception as e:
     st.error(f"發生錯誤: {e}")
-
-st.sidebar.markdown("---")
-st.sidebar.write("💡 提示: 台灣股票請加 `.TW` (如 `2330.TW`)")
-st.sidebar.write("⚠️ 免責聲明: 本程式僅供參考，不構成投資建議。")
+    st.info("提示：如果是台股，請記得加上 .TW，例如 2330.TW")
