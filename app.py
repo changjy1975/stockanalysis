@@ -104,18 +104,72 @@ try:
         # 顯示圖表
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 數據摘要 ---
-        st.subheader("最新盤後摘要")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("價格", f"{df['Close'].iloc[-1]:.2f}")
-        c2.metric("RSI(14)", f"{df['RSI'].iloc[-1]:.2f}")
-        
-        k_val = df['K'].iloc[-1]
-        d_val = df['D'].iloc[-1]
-        c3.metric("KD狀態", f"{'黃金交叉' if k_val > d_val else '死亡交叉'}", f"K:{k_val:.1f}")
-        
-        macdh = df['MACD_H'].iloc[-1]
-        c4.metric("MACD動能", f"{'多頭' if macdh > 0 else '空頭'}", f"{macdh:.2f}")
+       # --- 4. 策略建議引擎 ---
+        st.divider()
+        st.header("🤖 技術面操作建議 (未來三個月展望)")
 
-except Exception as e:
-    st.error(f"分析失敗: {e}")
+        # 提取最新數據
+        last_close = df['Close'].iloc[-1]
+        ma20_now = df['MA20'].iloc[-1]
+        ma60_now = df['MA60'].iloc[-1]
+        k_now = df['K'].iloc[-1]
+        d_now = df['D'].iloc[-1]
+        macd_h_now = df['MACD_H'].iloc[-1]
+        rsi_now = df['RSI'].iloc[-1]
+
+        # 判斷趨勢
+        if last_close > ma20_now > ma60_now:
+            trend = "強勢多頭"
+            trend_color = "green"
+        elif last_close < ma20_now < ma60_now:
+            trend = "弱勢空頭"
+            trend_color = "red"
+        else:
+            trend = "震盪整理"
+            trend_color = "orange"
+
+        # 策略生成
+        suggestion = ""
+        action = "觀望"
+        
+        if trend == "強勢多頭":
+            if k_now < 40:
+                action = "逢低佈局"
+                suggestion = "目前處於上升趨勢中的回檔，若 KD 出現金叉可考慮分批進場。"
+            elif rsi_now > 75:
+                action = "不宜追高"
+                suggestion = "股價處於超買區，短期乖離率過大，建議等待拉回均線再行考慮。"
+            else:
+                action = "持股續抱"
+                suggestion = "均線多頭排列，MACD 動能尚存，建議續抱並以 MA20 作為停損點。"
+        
+        elif trend == "弱勢空頭":
+            if rsi_now < 25:
+                action = "跌深反彈準備"
+                suggestion = "目前極度超跌，隨時可能有技術性反彈，但不建議長線攤平。"
+            else:
+                action = "減碼/空手"
+                suggestion = "趨勢向下，建議避開，待股價重新站上 MA60 且均線走平後再觀察。"
+        
+        else:
+            action = "區間操作"
+            suggestion = "目前方向不明朗，建議在區間高低點附近進行短線來回，或靜待帶量突破。"
+
+        # 顯示建議卡片
+        col_s1, col_s2 = st.columns([1, 3])
+        with col_s1:
+            st.markdown(f"### 建議行動：\n## :{trend_color}[{action}]")
+        with col_s2:
+            st.write(f"**當前趨勢評估：** {trend}")
+            st.write(f"**詳細分析：** {suggestion}")
+
+        # 未來三個月風險提示
+        with st.expander("📌 未來三個月觀測重點"):
+            st.write(f"""
+            1. **支撐位觀測**：目前下方的強力支撐位約在 {df['Low'].tail(60).min():.2f} (三個月低點)。
+            2. **壓力位觀測**：上方的反壓區約在 {df['High'].tail(60).max():.2f} (三個月高點)。
+            3. **量能變化**：需注意未來是否出現倍量紅棒，這通常是波段起漲訊號。
+            4. **總經影響**：建議同步關注聯準會 (Fed) 利率決策與相關產業財報發布。
+            """)
+
+        st.caption("⚠️ 免責聲明：本建議僅基於技術指標之邏輯運算，不代表未來必然走勢。投資有風險，操作前請謹慎評估。")
