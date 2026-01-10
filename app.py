@@ -32,15 +32,24 @@ try:
         df['MA60'] = ta.sma(df['Close'], length=60)
         df['RSI'] = ta.rsi(df['Close'], length=14)
 
-        # --- 顯示基本資訊 ---
+       # --- 顯示基本資訊 ---
         stock_info = yf.Ticker(ticker).info
         st.subheader(f"{stock_info.get('longName', ticker)} - 概況")
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("現價", f"{df['Close'].iloc[-1]:.2f}")
-        col2.metric("漲跌幅", f"{((df['Close'].iloc[-1] / df['Close'].iloc[-2]) - 1)*100:.2f}%")
-        col3.metric("52週最高", stock_info.get('fiftyTwoWeekHigh', 'N/A'))
-        col4.metric("市值 (B)", round(stock_info.get('marketCap', 0) / 1e9, 2))
+        # 修正點：確保抓到的是數值而不是 Series
+        # 使用 .values[-1] 或 float() 來確保取得單一數字
+        try:
+            current_price = float(df['Close'].iloc[-1])
+            prev_price = float(df['Close'].iloc[-2])
+            price_change = ((current_price / prev_price) - 1) * 100
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("現價", f"{current_price:.2f}")
+            col2.metric("漲跌幅", f"{price_change:.2f}%")
+            col3.metric("52週最高", stock_info.get('fiftyTwoWeekHigh', 'N/A'))
+            col4.metric("市值 (B)", round(stock_info.get('marketCap', 0) / 1e9, 2))
+        except Exception as e:
+            st.warning(f"部分數據顯示異常: {e}")
 
         # --- 繪製 K 線圖 ---
         st.subheader("技術分析圖表")
