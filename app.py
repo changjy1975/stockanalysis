@@ -29,97 +29,112 @@ try:
 
     if df.empty or len(df) < 40:
         st.title("📈 股票技術分析看板")
-        st.error("數據不足，請在左側增加日期範圍或檢查代碼是否正確。")
+        st.error("數據不足，請在左側增加日期範圍。")
     else:
-        # --- 1. 計算所有技術指標 (邏輯必須先執行) ---
+        # --- 1. 計算所有技術指標 ---
+        # SMA (簡單移動平均)
         df['MA20'] = ta.sma(df['Close'], length=20)
         df['MA60'] = ta.sma(df['Close'], length=60)
         
+        # EMA (指數移動平均) - 新增
+        df['EMA10'] = ta.ema(df['Close'], length=10)
+        df['EMA20'] = ta.ema(df['Close'], length=20)
+        
+        # MACD
         macd = ta.macd(df['Close'])
         df['MACD'] = macd.iloc[:, 0]
         df['MACD_H'] = macd.iloc[:, 1]
         df['MACD_S'] = macd.iloc[:, 2]
         
+        # KD
         kd = ta.stoch(df['High'], df['Low'], df['Close'])
         df['K'] = kd.iloc[:, 0]
         df['D'] = kd.iloc[:, 1]
         
+        # RSI
         df['RSI'] = ta.rsi(df['Close'], length=14)
 
-        # --- 2. 顯示標題與最新盤後摘要 (移到上方) ---
-        st.title(f"📈 {ticker} 技術分析看板")
+        # --- 2. 顯示標題與最新盤後摘要 ---
+        st.title(f"📈 {ticker} 技術分析看板 (含 EMA)")
         
-        # 獲取最新數據與變化
         curr_p = float(df['Close'].iloc[-1])
         prev_p = float(df['Close'].iloc[-2])
         price_diff = curr_p - prev_p
         price_perc = (price_diff / prev_p) * 100
         
+        ema10_val = df['EMA10'].iloc[-1]
+        ema20_val = df['EMA20'].iloc[-1]
+        rsi_val = df['RSI'].iloc[-1]
         k_val = df['K'].iloc[-1]
         d_val = df['D'].iloc[-1]
-        macdh = df['MACD_H'].iloc[-1]
-        rsi_val = df['RSI'].iloc[-1]
 
-        # 使用 Container 製作漂亮的摘要列
         with st.container():
             c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("最新股價", f"{curr_p:.2f}", f"{price_diff:+.2f} ({price_perc:+.2f}%)")
-            c2.metric("RSI(14) 強弱", f"{rsi_val:.1f}", "超買(>70)" if rsi_val > 70 else ("超賣(<30)" if rsi_val < 30 else "中性"))
             
-            # KD 狀態判斷
-            kd_status = "黃金交叉" if k_val > d_val else "死亡交叉"
-            kd_color = "normal" if k_val > d_val else "inverse"
-            c3.metric("KD 狀態", kd_status, f"K:{k_val:.1f} / D:{d_val:.1f}")
+            # EMA 狀態判斷
+            ema_trend = "短線向上" if curr_p > ema10_val > ema20_val else "短線回檔"
+            c2.metric("EMA 短線趨勢", ema_trend, f"EMA10:{ema10_val:.1f}")
             
-            # MACD 狀態判斷
-            macd_status = "多頭動能" if macdh > 0 else "空頭動能"
-            c4.metric("MACD 動能", macd_status, f"{macdh:.2f}")
+            # KD 狀態
+            kd_status = "金叉" if k_val > d_val else "死叉"
+            c3.metric("KD 狀態", kd_status, f"K:{k_val:.1f}")
             
-            # 均線狀態
-            ma_status = "多頭排列" if curr_p > df['MA20'].iloc[-1] > df['MA60'].iloc[-1] else "非多頭排列"
-            c5.metric("均線趨勢", ma_status)
+            # RSI 狀態
+            c4.metric("RSI(14)", f"{rsi_val:.1f}", "超買" if rsi_val > 70 else ("超賣" if rsi_val < 30 else "中性"))
+            
+            # 總體評價
+            score = "看多" if (curr_p > ema20_val and k_val > d_val) else "看空"
+            c5.metric("綜合評估", score)
         
-        st.markdown("---") # 分割線
+        st.markdown("---")
 
         # --- 3. 建立多層整合圖表 ---
         fig = make_subplots(
             rows=4, cols=1, 
             shared_xaxes=True, 
             vertical_spacing=0.03, 
-            row_heights=[0.5, 0.2, 0.2, 0.1]
+            row_heights=[0.5, 0.2, 0.15, 0.15]
         )
 
-        # 第一層：K線與均線
+        # --- 第一層：K線 + SMA + EMA ---
         fig.add_trace(go.Candlestick(
             x=df.index, open=df['Open'], high=df['High'], 
             low=df['Low'], close=df['Close'], name="K線"
         ), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.2), name='MA20'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='deepskyblue', width=1.2), name='MA60'), row=1, col=1)
+        
+        # SMA 實線
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='SMA20'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA60'], line=dict(color='deepskyblue', width=1.5), name='SMA60'), row=1, col=1)
+        
+        # EMA 點虛線 (區分 SMA)
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA10'], line=dict(color='lightgreen', width=1.2, dash='dot'), name='EMA10 (快)'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='hotpink', width=1.2, dash='dot'), name='EMA20 (慢)'), row=1, col=1)
 
-        # 第二層：MACD
+        # --- 第二層：MACD ---
         colors = ['#26A69A' if x > 0 else '#EF5350' for x in df['MACD_H']]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_H'], name='MACD柱狀', marker_color=colors), row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='white', width=1), name='MACD線'), row=2, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD_S'], line=dict(color='yellow', width=1), name='訊號線'), row=2, col=1)
 
-        # 第三層：KD
+        # --- 第三層：KD ---
         fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='cyan', width=1.2), name='K值'), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='magenta', width=1.2), name='D值'), row=3, col=1)
-        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,0,0,0.5)", row=3, col=1)
-        fig.add_hline(y=20, line_dash="dash", line_color="rgba(0,255,0,0.5)", row=3, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="rgba(255,0,0,0.3)", row=3, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="rgba(0,255,0,0.3)", row=3, col=1)
 
-        # 第四層：RSI
-        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='gold', width=1), name='RSI'), row=4, col=1)
-        fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
-        fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+        # --- 第四層：RSI ---
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='gold', width=1.2), name='RSI'), row=4, col=1)
+        fig.add_hline(y=70, line_dash="dash", line_color="rgba(255,0,0,0.3)", row=4, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="rgba(0,255,0,0.3)", row=4, col=1)
 
+        # 圖表佈局
         fig.update_layout(
-            height=850,
+            height=900,
             template="plotly_dark",
             xaxis_rangeslider_visible=False,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=20, b=10)
+            margin=dict(l=10, r=10, t=30, b=10)
         )
         
         fig.update_xaxes(showticklabels=False, row=1, col=1)
@@ -128,8 +143,8 @@ try:
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 4. 底部歷史數據 ---
-        with st.expander("查看歷史明細數據"):
+        # --- 底部歷史數據 ---
+        with st.expander("查看歷史明細數據 (含 EMA)"):
             st.dataframe(df.sort_index(ascending=False), use_container_width=True)
 
 except Exception as e:
