@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 # --- 1. 網頁設定 ---
 st.set_page_config(page_title="專業級全指標技術分析看板", layout="wide")
 
-# 自定義 CSS 讓介面更專業
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -23,56 +22,63 @@ ticker = st.sidebar.text_input("輸入股票代碼 (台股請加 .TW)", "2330.TW
 start_date = st.sidebar.date_input("開始日期", datetime.now() - timedelta(days=365))
 end_date = st.sidebar.date_input("結束日期", datetime.now())
 
-# --- 3. 數據抓取與計算核心 ---
+# --- 3. 數據抓取與計算核心 (增強穩健性) ---
 @st.cache_data
 def load_and_process_data(symbol, start, end):
-    # 下載數據
-    data = yf.download(symbol, start=start, end=end, auto_adjust=True)
-    if data.empty or len(data) < 40:
+    try:
+        data = yf.download(symbol, start=start, end=end, auto_adjust=True)
+        if data.empty or len(data) < 40:
+            return None
+        
+        # 強制處理 MultiIndex 欄位，確保只有一層索引
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        
+        df = data.copy()
+        
+        # 計算布林通道 (BBANDS)
+        # 使用位置選取 [0, 1, 2] 分別代表下軌、中軌、上軌，避免名稱不對的問題
+        bbands = ta.bbands(df['Close'], length=20, std=2)
+        if bbands is not None:
+            df['BBL'] = bbands.iloc[:, 0]  # Lower Band
+            df['BBM'] = bbands.iloc[:, 1]  # Middle Band
+            df['BBU'] = bbands.iloc[:, 2]  # Upper Band
+
+        # 均線 (SMA & EMA)
+        df['MA20'] = ta.sma(df['Close'], length=20)
+        df['MA60'] = ta.sma(df['Close'], length=60)
+        df['EMA10'] = ta.ema(df['Close'], length=10)
+        df['EMA20'] = ta.ema(df['Close'], length=20)
+
+        # MACD
+        macd = ta.macd(df['Close'])
+        if macd is not None:
+            df['MACD'] = macd.iloc[:, 0]
+            df['MACD_H'] = macd.iloc[:, 1]
+            df['MACD_S'] = macd.iloc[:, 2]
+
+        # KD (Stochastic)
+        kd = ta.stoch(df['High'], df['Low'], df['Close'])
+        if kd is not None:
+            df['K'] = kd.iloc[:, 0]
+            df['D'] = kd.iloc[:, 1]
+
+        # RSI
+        df['RSI'] = ta.rsi(df['Close'], length=14)
+        
+        # 移除含有空值的行 (初期計算指標會產生 NaN)
+        return df.dropna(subset=['BBU', 'MACD', 'K', 'RSI'])
+    except Exception as e:
+        st.error(f"數據處理出錯: {e}")
         return None
-    
-    # 處理 MultiIndex 欄位問題
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    
-    df = data.copy()
-    
-    # 計算技術指標
-    # 布林通道 (Bollinger Bands)
-    bbands = ta.bbands(df['Close'], length=20, std=2)
-    df = pd.concat([df, bbands], axis=1)
-    # 欄位統一命名
-    df.rename(columns={'BBL_20_2.0': 'BBL', 'BBM_20_2.0': 'BBM', 'BBU_20_2.0': 'BBU'}, inplace=True)
 
-    # 均線 (SMA & EMA)
-    df['MA20'] = ta.sma(df['Close'], length=20)
-    df['MA60'] = ta.sma(df['Close'], length=60)
-    df['EMA10'] = ta.ema(df['Close'], length=10)
-    df['EMA20'] = ta.ema(df['Close'], length=20)
-
-    # MACD
-    macd = ta.macd(df['Close'])
-    df['MACD'] = macd.iloc[:, 0]
-    df['MACD_H'] = macd.iloc[:, 1]
-    df['MACD_S'] = macd.iloc[:, 2]
-
-    # KD (Stochastic)
-    kd = ta.stoch(df['High'], df['Low'], df['Close'])
-    df['K'] = kd.iloc[:, 0]
-    df['D'] = kd.iloc[:, 1]
-
-    # RSI
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    
-    return df
-
-# --- 4. 精準加權評分系統邏輯 ---
+# --- 4. 精準加權評分系統 ---
 def calculate_advanced_score(df):
     score = 0
     details = []
     curr = df.iloc[-1]
     
-    # A. 趨勢類 (權重 40%)
+    # A. 趨勢類 (權重 4分)
     if curr['Close'] > curr['EMA10'] > curr['EMA20']:
         score += 4
         details.append("均線多頭排列：強勢上升趨勢 (+4)")
@@ -83,23 +89,22 @@ def calculate_advanced_score(df):
         score -= 3
         details.append("股價跌破關鍵均線：趨勢偏弱 (-3)")
 
-    # B. 動能類 (權重 40%)
-    # MACD
+    # B. 動能類 (權重 4分)
     if curr['MACD_H'] > 0:
         score += 2
-        details.append("MACD 柱狀體位於零軸上方：動能偏多 (+2)")
+        details.append("MACD 柱狀體位於零軸上方 (+2)")
     else:
         score -= 2
-        details.append("MACD 柱狀體位於零軸下方：動能偏空 (-2)")
-    # KD
+        details.append("MACD 柱狀體位於零軸下方 (-2)")
+        
     if curr['K'] > curr['D']:
         score += 2
-        details.append("KD 呈金叉狀態：短線具進攻動能 (+2)")
+        details.append("KD 呈金叉狀態 (+2)")
     else:
         score -= 2
-        details.append("KD 呈死叉狀態：短線力道減弱 (-2)")
+        details.append("KD 呈死叉狀態 (-2)")
 
-    # C. 位階/風險類 (權重 20%)
+    # C. 風險類 (權重 2分)
     if curr['Close'] > curr['BBU'] or curr['RSI'] > 75:
         score -= 2
         details.append("股價觸及布林上軌或 RSI 過熱：注意追高風險 (-2)")
@@ -113,38 +118,33 @@ def calculate_advanced_score(df):
 try:
     df = load_and_process_data(ticker, start_date, end_date)
 
-    if df is None:
+    if df is None or len(df) == 0:
         st.title("📈 股票技術分析看板")
-        st.error("數據不足或代碼錯誤。請確保日期範圍足夠長 (至少40天)，並檢查代碼是否正確。")
+        st.warning("無法獲取足夠數據。請檢查股票代碼（例如台股須加 .TW）或增加日期範圍。")
     else:
-        # 計算分數
         total_score, score_details = calculate_advanced_score(df)
         
-        # 顯示標題
         st.title(f"📈 {ticker} 專業技術看板")
 
-        # --- 第一層：儀表板摘要 ---
-        curr_p = df['Close'].iloc[-1]
-        prev_p = df['Close'].iloc[-2]
+        # --- 儀表板摘要 ---
+        curr_p = float(df['Close'].iloc[-1])
+        prev_p = float(df['Close'].iloc[-2])
         diff = curr_p - prev_p
         perc = (diff / prev_p) * 100
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("最新股價", f"{curr_p:.2f}", f"{diff:+.2f} ({perc:+.2f}%)")
         
-        # 評分視覺化
-        if total_score >= 5: score_label, score_color = "🟢 強力看多", "success"
-        elif 0 < total_score < 5: score_label, score_color = "🔵 偏多看待", "info"
-        elif -5 < total_score <= 0: score_label, score_color = "🟡 中性偏空", "warning"
-        else: score_label, score_color = "🔴 強力看空", "error"
+        if total_score >= 5: score_label = "🟢 強力看多"
+        elif 0 < total_score < 5: score_label = "🔵 偏多看待"
+        elif -5 < total_score <= 0: score_label = "🟡 中性偏空"
+        else: score_label = "🔴 強力看空"
         
         c2.metric("綜合評分", f"{total_score} 分", score_label)
         c3.metric("RSI (14)", f"{df['RSI'].iloc[-1]:.1f}")
         c4.metric("布林位置", "超漲" if curr_p > df['BBU'].iloc[-1] else ("超跌" if curr_p < df['BBL'].iloc[-1] else "常態"))
 
-        st.markdown("---")
-
-        # --- 第二層：多層整合圖表 ---
+        # --- 多層整合圖表 ---
         fig = make_subplots(
             rows=4, cols=1, 
             shared_xaxes=True, 
@@ -154,10 +154,8 @@ try:
 
         # 1. K線 + 布林 + 均線
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線"), row=1, col=1)
-        # 布林通道填充
         fig.add_trace(go.Scatter(x=df.index, y=df['BBL'], line=dict(color='rgba(173, 216, 230, 0.2)', width=1), name='布林下軌'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['BBU'], line=dict(color='rgba(173, 216, 230, 0.2)', width=1), name='布林上軌', fill='tonexty', fillcolor='rgba(173, 216, 230, 0.05)'), row=1, col=1)
-        # 均線
         fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], line=dict(color='orange', width=1.5), name='SMA20'), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['EMA10'], line=dict(color='lightgreen', width=1, dash='dot'), name='EMA10'), row=1, col=1)
 
@@ -178,9 +176,8 @@ try:
         fig.update_layout(height=850, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- 第三層：AI 分析報告區 ---
+        # --- AI 分析報告區 ---
         col_info, col_detail = st.columns([1.5, 1])
-        
         with col_info:
             st.subheader("🔍 AI 技術面解析報告")
             report_text = "\n\n".join([f"• {d}" for d in score_details])
@@ -192,15 +189,11 @@ try:
         with col_detail:
             st.subheader("💡 交易策略建議")
             if total_score >= 5:
-                st.write("目前趨勢極強且動能配合，適合持股待漲。若股價回測 EMA10 不破，可考慮作為加碼點。")
+                st.write("目前趨勢極強，適合持股待漲。")
             elif total_score <= -5:
-                st.write("空頭趨勢強烈且動能向下，應保守看待，先行觀望，直到股價重新站上布林中軌或 KD 低檔金叉。")
+                st.write("趨勢疲軟，建議保守觀望。")
             else:
-                st.write("當前處於震盪區間，建議參考布林通道上下軌進行區間操作，或等待明顯的指標突破訊號。")
-
-        # --- 底部歷史數據 ---
-        with st.expander("查看原始數據明細"):
-            st.dataframe(df.sort_index(ascending=False), use_container_width=True)
+                st.write("處於震盪區間，建議參考布林軌道操作。")
 
 except Exception as e:
     st.error(f"系統運行錯誤: {e}")
