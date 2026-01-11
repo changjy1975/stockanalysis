@@ -112,4 +112,60 @@ else:
     entry_p = curr['EMA10']         # 以 EMA10 為進場基準
     tp_p = curr['BBU']              # 止盈參考布林上軌
     sl_p = min(curr['BBL'], curr['EMA20'] * 0.97) # 止損參考布林下軌或 EMA20 破位
-    dist = (curr_p / entry
+    dist = (curr_p / entry_p) - 1   # 計算與 EMA10 的乖離率
+
+    p1, p2, p3 = st.columns(3)
+    p1.markdown(f'<div class="price-box">🟢 <b>建議進場點</b><br><h2>{entry_p:.2f}</h2><p>參考 EMA10 支撐 (偏離 {dist:+.2%})</p></div>', unsafe_allow_html=True)
+    p2.markdown(f'<div class="price-box">🔴 <b>短線止盈位</b><br><h2>{tp_p:.2f}</h2><p>參考布林上軌壓力</p></div>', unsafe_allow_html=True)
+    p3.markdown(f'<div class="price-box">⚠️ <b>關鍵止損位</b><br><h2>{sl_p:.2f}</h2><p>參考布林下軌或破月線 3%</p></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # 第三層：專業技術指標圖表 (四層架構)
+    st.subheader("📊 專業技術分析看板")
+    fig = make_subplots(
+        rows=4, cols=1, shared_xaxes=True, 
+        vertical_spacing=0.03, row_heights=[0.5, 0.15, 0.15, 0.2]
+    )
+
+    # 1. 主圖：K線 + 布林 + 均線
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['BBL'], line=dict(color='rgba(255,255,255,0.1)'), name="布林下軌"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['BBU'], line=dict(color='rgba(255,255,255,0.1)'), name="布林上軌", fill='tonexty'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA10'], line=dict(color='lightgreen', width=1.5), name="EMA10 (進場線)"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='orange', width=1.5), name="EMA20 (月線)"), row=1, col=1)
+
+    # 2. MACD
+    colors = ['#26A69A' if x > 0 else '#EF5350' for x in df['MACD_H']]
+    fig.add_trace(go.Bar(x=df.index, y=df['MACD_H'], name='MACD柱', marker_color=colors), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='white', width=1), name='MACD線'), row=2, col=1)
+
+    # 3. KD
+    fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='cyan', width=1.2), name='K值'), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='magenta', width=1.2), name='D值'), row=3, col=1)
+
+    # 4. RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='gold', width=1.2), name='RSI'), row=4, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+
+    fig.update_layout(height=900, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 第四層：AI 解析報告與戰術提示
+    st.markdown("---")
+    r1, r2 = st.columns([1.5, 1])
+    with r1:
+        st.subheader("🔍 AI 技術面解析報告")
+        report = "\n\n".join([f"• {d}" for d in score_details])
+        if total_score >= 5: st.success(report)
+        elif total_score <= -5: st.error(report)
+        else: st.info(report)
+    with r2:
+        st.subheader("💡 實戰戰術提醒")
+        if abs(dist) < 0.015:
+            st.write("✅ **時機成熟**：股價正貼近 EMA10 支撐，若多空評分為正，是強勢股良好的切入點。")
+        elif dist > 0:
+            st.write(f"⌛ **稍安勿躁**：目前股價高於 EMA10 約 **{dist:.1%}**，短線乖離已現，建議等回測 EMA10 再接。")
+        else:
+            st.write("⚠️ **注意風險**：股價已跌破 EMA10，請觀察是否能守住月線 (EMA20)，否則短線轉弱。")
