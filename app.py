@@ -12,7 +12,7 @@ st.set_page_config(page_title="專業級技術看板 (含進出建議)", layout=
 st.markdown("""
     <style>
     .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; }
-    .price-box { border: 1px solid #4B5563; padding: 15px; border-radius: 10px; background-color: #111827; }
+    .price-box { border: 1px solid #4B5563; padding: 15px; border-radius: 10px; background-color: #111827; height: 180px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -25,7 +25,7 @@ end_date = st.sidebar.date_input("結束日期", datetime.now())
 st.sidebar.info("""
 **💡 代碼小提醒：**
 - 上市股票：代碼 + .TW
-- 上櫃股票：代碼 + .TWO
+- 上櫃股票：代碼 + .TWO (如 6147.TWO)
 """)
 
 # --- 3. 數據抓取與計算 ---
@@ -37,14 +37,16 @@ def load_and_process_data(symbol, start, end):
         if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
         df = data.copy()
-        # 布林通道
+        # 布林通道 (使用 iloc 確保獲取)
         bbands = ta.bbands(df['Close'], length=20, std=2)
         df['BBL'], df['BBM'], df['BBU'] = bbands.iloc[:, 0], bbands.iloc[:, 1], bbands.iloc[:, 2]
+        
         # 均線
         df['MA20'] = ta.sma(df['Close'], length=20)
         df['EMA10'] = ta.ema(df['Close'], length=10)
         df['EMA20'] = ta.ema(df['Close'], length=20)
-        # 動能指標
+        
+        # 指標
         macd = ta.macd(df['Close'])
         df['MACD'], df['MACD_H'] = macd.iloc[:, 0], macd.iloc[:, 1]
         kd = ta.stoch(df['High'], df['Low'], df['Close'])
@@ -54,16 +56,16 @@ def load_and_process_data(symbol, start, end):
         return df.dropna()
     except: return None
 
-# --- 4. 主程式 ---
+# --- 4. 主程式流程 ---
 df = load_and_process_data(ticker_input, start_date, end_date)
 
 if df is None:
-    st.error("查無數據或代碼格式錯誤，請檢查後再試。")
+    st.error("查無數據或代碼格式錯誤。請確認：上市加 .TW，上櫃加 .TWO")
 else:
     curr = df.iloc[-1]
     curr_p = float(curr['Close'])
     
-    # 計算分數與評分細節
+    # 評分系統
     score = 0
     if curr['Close'] > curr['EMA20']: score += 4
     if curr['K'] > curr['D']: score += 3
@@ -71,61 +73,56 @@ else:
 
     st.title(f"📈 {ticker_input} 技術分析與進出建議")
 
-    # 頂部指標
+    # 頂部指標摘要
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("目前股價", f"{curr_p:.2f}")
-    c2.metric("多空評分", f"{score} 分", "看多" if score >= 5 else "看空")
-    c3.metric("EMA20 (關鍵支撐)", f"{curr['EMA20']:.2f}")
-    c4.metric("布林上軌 (壓力位)", f"{curr['BBU']:.2f}")
+    c2.metric("多空評分", f"{score} 分", "偏多" if score >= 5 else "偏空")
+    c3.metric("EMA20 (趨勢)", f"{curr['EMA20']:.2f}")
+    c4.metric("RSI (14)", f"{curr['RSI']:.1f}")
 
-    # 圖表區
+    # 圖表
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.05)
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BBU'], line=dict(color='rgba(255,255,255,0.2)'), name="布林上軌"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['BBL'], line=dict(color='rgba(255,255,255,0.2)'), name="布林下軌", fill='tonexty'), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='orange', width=2), name="EMA20 (趨勢線)"), row=1, col=1)
-    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='orange', width=2), name="EMA20"), row=1, col=1)
+    fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 重點：進出價位建議區 ---
+    # --- 🎯 進出價位建議 ---
     st.markdown("### 🎯 實戰進出價位建議")
     
-    # 邏輯計算建議價位
-    # 進場區間：EMA20 到 EMA20 * 1.01 (1%誤差)
-    entry_low = curr['EMA20'] * 0.995
-    entry_high = curr['EMA20'] * 1.01
-    # 止盈：布林上軌
-    take_profit = curr['BBU']
-    # 止損：EMA20 跌破 3% 或 布林下軌
-    stop_loss = min(curr['BBL'], curr['EMA20'] * 0.97)
-
-    box1, box2, box3 = st.columns(3)
+    # 計算邏輯
+    entry_target = curr['EMA20']  # 進場基準位
+    take_profit = curr['BBU']     # 止盈參考位
+    stop_loss = min(curr['BBL'], curr['EMA20'] * 0.97) # 止損位
     
-    with box1:
-        st.markdown('<div class="price-box">', unsafe_allow_html=True)
-        st.write("🟢 **建議進場區間 (支撐)**")
-        st.title(f"{entry_low:.2f} ~ {entry_high:.2f}")
-        st.caption("說明：參考 EMA20 均線附近支撐進場，相對安全。")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # 計算距離進場位的百分比 (修正後的格式)
+    dist_to_entry = (curr_p / entry_target) - 1
 
-    with box2:
-        st.markdown('<div class="price-box">', unsafe_allow_html=True)
-        st.write("🔴 **建議止盈目標 (壓力)**")
-        st.title(f"{take_profit:.2f}")
-        st.caption("說明：參考布林上軌，觸及此處代表短線乖離已大。")
-        st.markdown('</div>', unsafe_allow_html=True)
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        st.markdown(f'<div class="price-box">🟢 <b>建議進場點 (支撐)</b><br><h2>{entry_target:.2f}</h2><p>參考 EMA20 均線，目前偏離 {dist_to_entry:+.2%}</p></div>', unsafe_allow_html=True)
+    with b2:
+        st.markdown(f'<div class="price-box">🔴 <b>止盈參考 (壓力)</b><br><h2>{take_profit:.2f}</h2><p>參考布林上軌位置</p></div>', unsafe_allow_html=True)
+    with b3:
+        st.markdown(f'<div class="price-box">⚠️ <b>止損參考 (破位)</b><br><h2>{stop_loss:.2f}</h2><p>跌破 EMA20 約 3% 或布林下軌</p></div>', unsafe_allow_html=True)
 
-    with box3:
-        st.markdown('<div class="price-box">', unsafe_allow_html=True)
-        st.write("⚠️ **建議止損價位 (停損)**")
-        st.title(f"{stop_loss:.2f}")
-        st.caption("說明：若收盤價跌破此價位，代表趨勢轉空，需離場。")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # 戰術執行說明
+    st.markdown("---")
+    st.subheader("📝 戰術執行說明")
+    
+    # 根據距離給予不同建議
+    if abs(dist_to_entry) < 0.015:
+        advice = "✅ **股價正處於進場區間附近**，若指標維持多頭，是良好的佈局時機。"
+    elif dist_to_entry > 0:
+        advice = f"⌛ **股價目前高於進場區間 {dist_to_entry:.2%}**，建議等待回測支撐再行介入，避免追高。"
+    else:
+        advice = "⚠️ **股價低於趨勢支撐**，需觀察是否能在短時間內站回 EMA20，否則趨勢有轉弱風險。"
 
-    # 策略小提醒
     st.info(f"""
-    **📣 戰術執行：**
-    1. 目前股價為 **{curr_p:.2f}**，距離建議進場區間約 **{((curr_p/entry_high)-1)*100:+.2% }**。
-    2. 如果總分大於 5 分，且股價回測 EMA20 不破，是勝率較高的買點。
-    3. **警語：** 本工具僅供技術分析參考，投資人應獨立判斷風險，盈虧自負。
+    **📣 當前操作建議：**
+    1. 目前股價：**{curr_p:.2f}**
+    2. {advice}
+    3. **多空評分報告：** 目前總分為 **{score} 分**，{ '盤勢強勁，適合偏多操作' if score >= 7 else '盤勢震盪，建議分批佈局' if score >= 4 else '盤勢偏弱，建議持幣觀望' }。
     """)
