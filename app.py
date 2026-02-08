@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="量化交易看板 PRO (訊號標註版)", layout="wide")
+st.set_page_config(page_title="量化交易看板 PRO (精確訊號版)", layout="wide")
 
 st.markdown("""
     <style>
@@ -33,7 +33,7 @@ def load_and_process_data(symbol, start, end):
         df.ta.stoch(append=True)
         df.ta.rsi(length=14, append=True)
         
-        # 動態映射
+        # 動態映射欄位
         cols = df.columns
         mapping = {
             'EMA10': [c for c in cols if 'EMA_10' in c],
@@ -47,14 +47,18 @@ def load_and_process_data(symbol, start, end):
         }
         df.rename(columns={v[0]: k for k, v in mapping.items() if v}, inplace=True)
         
-        # --- 買賣訊號邏輯 ---
-        df['Buy_Signal'] = (df['K'] > df['D']) & (df['K'].shift(1) <= df['D'].shift(1)) & (df['Close'] > df['EMA20'])
-        df['Sell_Signal'] = (df['Close'] < df['EMA10']) | (df['RSI'] > 75)
+        # --- 調整後的買賣訊號邏輯 ---
+        # 買進：KD金叉 + K < 30 + 站上月線
+        df['Buy_Signal'] = (df['K'] > df['D']) & (df['K'].shift(1) <= df['D'].shift(1)) & \
+                           (df['K'] < 30) & (df['Close'] > df['EMA20'])
+        
+        # 賣出：跌破 EMA10 + RSI 過熱 (>75)
+        df['Sell_Signal'] = (df['Close'] < df['EMA10']) & (df['RSI'] > 75)
         
         return df[df.index >= pd.to_datetime(start)].dropna()
     except: return None
 
-# --- 3. 側邊欄與數據載入 ---
+# --- 3. 側邊欄設定 ---
 st.sidebar.header("📊 投資參數")
 ticker_input = st.sidebar.text_input("股票代碼", "2330.TW").upper()
 start_date = st.sidebar.date_input("開始日期", datetime.now() - timedelta(days=365))
@@ -65,14 +69,14 @@ if df is not None:
     curr = df.iloc[-1]
     curr_p = float(curr['Close'])
     
-    st.title(f"📈 {ticker_input} 技術指標看板 (含買賣點標註)")
+    st.title(f"📈 {ticker_input} 技術指標看板 (精確訊號版)")
     
-    # 指標摘要
+    # 第一層：指標摘要
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("目前股價", f"{curr_p:.2f}", f"{(curr_p - df['Close'].iloc[-2]):+.2f}")
-    m2.metric("EMA10 支撐", f"{curr['EMA10']:.2f}")
+    m2.metric("K值 (KD)", f"{curr['K']:.1f}")
     m3.metric("RSI(14)", f"{curr['RSI']:.1f}")
-    m4.metric("成交量", f"{int(curr['Volume']):,}")
+    m4.metric("EMA10 支撐", f"{curr['EMA10']:.2f}")
 
     # --- 4. 繪製圖表 ---
     fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.4, 0.1, 0.15, 0.15, 0.2])
@@ -82,43 +86,44 @@ if df is not None:
     fig.add_trace(go.Scatter(x=df.index, y=df['EMA10'], line=dict(color='#00ff88', width=1.2), name="EMA10"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], line=dict(color='#ffaa00', width=1.2), name="EMA20"), row=1, col=1)
 
-    # --- 新增：買賣建議點標註 ---
-    # 買入標記 (綠色向上三角形)
+    # 買進標記 (綠色三角形)
     buy_df = df[df['Buy_Signal']]
-    fig.add_trace(go.Scatter(
-        x=buy_df.index, y=buy_df['Low'] * 0.98,
-        mode='markers', name='買入訊號',
-        marker=dict(symbol='triangle-up', size=12, color='lime', line=dict(width=1, color='white'))
-    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=buy_df.index, y=buy_df['Low'] * 0.97, mode='markers', name='精確買入',
+                             marker=dict(symbol='triangle-up', size=15, color='lime', line=dict(width=1, color='white'))), row=1, col=1)
 
-    # 賣出標記 (紅色向下三角形)
-    sell_df = df[df['Sell_Signal'] & ~df['Sell_Signal'].shift(1).fillna(False)] # 過濾重複連續訊號
-    fig.add_trace(go.Scatter(
-        x=sell_df.index, y=sell_df['High'] * 1.02,
-        mode='markers', name='賣出訊號',
-        marker=dict(symbol='triangle-down', size=12, color='red', line=dict(width=1, color='white'))
-    ), row=1, col=1)
+    # 賣出標記 (紅色三角形)
+    sell_df = df[df['Sell_Signal']]
+    fig.add_trace(go.Scatter(x=sell_df.index, y=sell_df['High'] * 1.03, mode='markers', name='精確賣出',
+                             marker=dict(symbol='triangle-down', size=15, color='red', line=dict(width=1, color='white'))), row=1, col=1)
 
-    # 成交量
+    # 成交量 (紅漲綠跌)
     vol_colors = ['red' if df['Close'].iloc[i] >= df['Open'].iloc[i] else 'green' for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=vol_colors, name="成交量", opacity=0.6), row=2, col=1)
 
-    # MACD
+    # MACD 
     macd_colors = ['red' if x > 0 else 'green' for x in df['MACD_H']]
     fig.add_trace(go.Bar(x=df.index, y=df['MACD_H'], marker_color=macd_colors, name="MACD柱"), row=3, col=1)
     
-    # KD & RSI
+    # KD 
     fig.add_trace(go.Scatter(x=df.index, y=df['K'], line=dict(color='cyan'), name='K'), row=4, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['D'], line=dict(color='magenta'), name='D'), row=4, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='gold'), name='RSI'), row=5, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
 
-    fig.update_layout(height=1000, template="plotly_dark", xaxis_rangeslider_visible=False)
+    # RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='gold'), name='RSI'), row=5, col=1)
+    fig.add_hline(y=75, line_dash="dash", line_color="red", row=5, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=5, col=1)
+
+    fig.update_layout(height=1000, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(l=50, r=50, t=30, b=30))
     st.plotly_chart(fig, use_container_width=True)
 
-    # 底部提示
-    st.info("💡 **訊號說明**：\n"
-            "* 🟢 **買入 (綠色三角形)**：KD 黃金交叉 且 股價站於月線 (EMA20) 之上。\n"
-            "* 🔴 **賣出 (紅色三角形)**：股價跌破 EMA10 或 RSI 過熱 (>75)。")
+    # 底部診斷說明
+    st.subheader("🔍 訊號策略說明")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.success("🟢 **買進條件 (嚴謹低檔)**：\n1. KD 出現黃金交叉\n2. K 值 < 30 (確保位階低)\n3. 股價 > 月線 EMA20 (確保趨勢向上)")
+    with c2:
+        st.error("🔴 **賣出條件 (強勢轉弱)**：\n1. 股價跌破 EMA10\n2. RSI > 75 (確保處於過熱區)\n*註：兩者皆符合才觸發賣出，避免被洗盤。*")
 
 else:
-    st.error("無法抓取數據，請確認代碼與日期。")
+    st.error("數據載入失敗。請確認代碼格式（台股如 2330.TW）。")
